@@ -131,6 +131,65 @@ impl Persist<'_> for Net {
     }
 }
 
+impl Net{
+    // Resets the device state in-place using the provided snapshot state.
+    // Mirrors `Net::restore()`, but applies the state to an existing device
+    // instead of creating a new one.
+    //
+    // Host-side resources (e.g. tap, eventfds) and event loop bindings are
+    // preserved and not reinitialized.
+    fn reset(
+        &mut self,
+        constructor_args: Self::ConstructorArgs,
+        state: &Self::State,
+    ) -> Result<Self, Self::Error> {
+        // RateLimiter::restore() can fail at creating a timerfd.
+        let rx_rate_limiter = RateLimiter::restore((), &state.rx_rate_limiter_state)?;
+        let tx_rate_limiter = RateLimiter::restore((), &state.tx_rate_limiter_state)?;
+
+        // We trust the MMIODeviceManager::restore to pass us an MMDS data store reference if
+        // there is at least one net device having the MMDS NS present and/or the mmds version was
+        // persisted in the snapshot.
+        if let Some(mmds_ns) = &state.mmds_ns {
+            // We're safe calling unwrap() to discard the error, as MmdsNetworkStack::restore()
+            // always returns Ok.
+            self.mmds_ns = Some(
+                MmdsNetworkStack::restore(
+                    constructor_args
+                        .mmds
+                        .map_or_else(|| Err(NetPersistError::NoMmdsDataStore), Ok)?,
+                    mmds_ns,
+                )
+                .unwrap(),
+            );
+        } else {
+            self.mmds_ns = None;
+        }
+
+        self.queues = state.virtio_state.build_queues_checked(
+            &constructor_args.mem,
+            VirtioDeviceType::Net,
+            NET_NUM_QUEUES,
+            NET_QUEUE_MAX_SIZE,
+        )?;
+
+        self.avail_features = state.virtio_state.avail_features;
+        self.acked_features = state.virtio_state.acked_features;
+
+        if let Some(mac) = state.config_space.guest_mac {
+            self.config_space.guest_mac = mac;
+        }
+        self.guest_mac = state.config_space.guest_mac;
+
+        self.rx_frame_buf = [0u8; MAX_BUFFER_SIZE];
+        self.tx_frame_headers = [0u8; frame_hdr_len()];
+        self.tx_buffer = Default::default();
+        self.rx_buffer = RxBuffers::new()?;
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
