@@ -650,6 +650,23 @@ impl Vmm {
 
         Ok(())
     }
+
+    fn reset_net_states(&mut self, net_states: &[VirtioDeviceState<NetState>]) -> Result<(), MicrovmStateError> {
+       for net_state in net_states {
+           self.device_manager
+               .with_virtio_device(&net_state.device_id, |net| {
+                   let ctor_args = NetConstructorArgs {
+                       mem: self.vm.common.guest_memory.clone(),
+                       mmds: net.mmds_ns.as_ref().map(|ns| ns.mmds.clone())
+                   };
+                   net.reset(ctor_args, &net_state.device_state)
+               })
+               .map_err(|_| MicrovmStateError::DeviceNotFound(net_state.device_id.clone()))?
+               .map_err(MicrovmStateError::ResetNetState)?;
+       } 
+       Ok()
+    }
+
     /// Dumps CPU configuration.
     pub fn dump_cpu_config(&mut self) -> Result<Vec<CpuConfiguration>, DumpCpuConfigError> {
         for handle in self.vcpus_handles.iter_mut() {

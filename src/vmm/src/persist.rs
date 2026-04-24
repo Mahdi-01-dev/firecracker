@@ -140,8 +140,12 @@ pub enum MicrovmStateError {
     NotAllowed(String),
     /// Cannot restore devices: {0}
     RestoreDevices(#[from] DevicePersistError),
+    /// Device not found: {0}
+    DeviceNotFound(String),
     /// Cannot restore Vcpu state: {0}
     RestoreVcpuState(vstate::vcpu::VcpuError),
+    /// Cannot reset Net state: {0}
+    ResetNetState(devices::virtio::net::NetPersistError),
     /// Cannot save Vcpu state: {0}
     SaveVcpuState(vstate::vcpu::VcpuError),
     /// Cannot save Vm state: {0}
@@ -744,6 +748,8 @@ pub enum ResetSnapshotError {
     RestoreVmState(ArchVmError),
     /// Failed to restore Vcpu states: {0}
     RestoreVcpuState(MicrovmStateError),
+    /// Failed to reset Net states: {0}
+    ResetNetStates(MicrovmStateError),
     /// Failed to load new snapshot state from file: {0}
     LoadNewState(SnapshotStateFromFileError),
 }
@@ -803,6 +809,9 @@ pub fn reset_to_snapshot(
     vmm.vm
         .restore_state(&microvm_state.vm_state)
         .map_err(ResetSnapshotError::RestoreVmState)?;
+
+    vmm.reset_net_states(&microvm_state.device_states.mmio_state.net_devices)
+        .map_err(ResetSnapshotError::ResetNetStates)?;
 
     let page_ranges: Vec<VirtualAddressRange> = {
         let reader = BufReader::new(&stream);
