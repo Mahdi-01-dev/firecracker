@@ -89,7 +89,7 @@ impl Persist<'_> for Net {
     fn restore(
         constructor_args: Self::ConstructorArgs,
         state: &Self::State,
-    ) -> Result<Self, Self::Error> {
+    ) -> Result<(), Self::Error> {
         // RateLimiter::restore() can fail at creating a timerfd.
         let rx_rate_limiter = RateLimiter::restore((), &state.rx_rate_limiter_state)?;
         let tx_rate_limiter = RateLimiter::restore((), &state.tx_rate_limiter_state)?;
@@ -127,11 +127,15 @@ impl Persist<'_> for Net {
         net.avail_features = state.virtio_state.avail_features;
         net.acked_features = state.virtio_state.acked_features;
 
-        Ok(net)
+        Ok(())
     }
 }
 
 impl Net{
+    type State = NetState;
+    type ConstructorArgs = NetConstructorArgs;
+    type Error = NetPersistError;
+
     // Resets the device state in-place using the provided snapshot state.
     // Mirrors `Net::restore()`, but applies the state to an existing device
     // instead of creating a new one.
@@ -142,7 +146,7 @@ impl Net{
         &mut self,
         constructor_args: Self::ConstructorArgs,
         state: &Self::State,
-    ) -> Result<Self, Self::Error> {
+    ) -> Result<(), Self::Error> {
         // RateLimiter::restore() can fail at creating a timerfd.
         let rx_rate_limiter = RateLimiter::restore((), &state.rx_rate_limiter_state)?;
         let tx_rate_limiter = RateLimiter::restore((), &state.tx_rate_limiter_state)?;
