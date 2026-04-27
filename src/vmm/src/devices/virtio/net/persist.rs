@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
-use super::device::{Net, RxBuffers};
+use super::device::Net;
 use super::{NET_NUM_QUEUES, NET_QUEUE_MAX_SIZE, RX_INDEX, TapError};
 use crate::devices::virtio::device::{ActiveState, DeviceState, VirtioDeviceType};
 use crate::devices::virtio::persist::{PersistError as VirtioStateError, VirtioDeviceState};
@@ -65,6 +65,8 @@ pub enum NetPersistError {
     NoMmdsDataStore,
     /// Setting tap interface offload flags failed: {0}
     TapSetOffload(TapError),
+    /// IoVecBuffer(Mut) error: {0}
+    IoVecError(#[from] super::IoVecError),
 }
 
 impl Persist<'_> for Net {
@@ -89,7 +91,7 @@ impl Persist<'_> for Net {
     fn restore(
         constructor_args: Self::ConstructorArgs,
         state: &Self::State,
-    ) -> Result<(), Self::Error> {
+    ) -> Result<Self, Self::Error> {
         // RateLimiter::restore() can fail at creating a timerfd.
         let rx_rate_limiter = RateLimiter::restore((), &state.rx_rate_limiter_state)?;
         let tx_rate_limiter = RateLimiter::restore((), &state.tx_rate_limiter_state)?;
@@ -127,26 +129,22 @@ impl Persist<'_> for Net {
         net.avail_features = state.virtio_state.avail_features;
         net.acked_features = state.virtio_state.acked_features;
 
-        Ok(())
+        Ok(net)
     }
 }
 
 impl Net{
-    type State = NetState;
-    type ConstructorArgs = NetConstructorArgs;
-    type Error = NetPersistError;
-
     // Resets the device state in-place using the provided snapshot state.
     // Mirrors `Net::restore()`, but applies the state to an existing device
     // instead of creating a new one.
     //
     // Host-side resources (e.g. tap, eventfds) and event loop bindings are
     // preserved and not reinitialized.
-    fn reset(
+    pub fn reset(
         &mut self,
-        constructor_args: Self::ConstructorArgs,
-        state: &Self::State,
-    ) -> Result<(), Self::Error> {
+        constructor_args: NetConstructorArgs,
+        state: &NetState,
+    ) -> Result<(), NetPersistError> {
         // RateLimiter::restore() can fail at creating a timerfd.
         let rx_rate_limiter = RateLimiter::restore((), &state.rx_rate_limiter_state)?;
         let tx_rate_limiter = RateLimiter::restore((), &state.tx_rate_limiter_state)?;
@@ -185,10 +183,7 @@ impl Net{
         }
         self.guest_mac = state.config_space.guest_mac;
 
-        self.rx_frame_buf = [0u8; MAX_BUFFER_SIZE];
-        self.tx_frame_headers = [0u8; frame_hdr_len()];
-        self.tx_buffer = Default::default();
-        self.rx_buffer = RxBuffers::new()?;
+        self.reset_buffers()?;
 
         Ok(())
     }

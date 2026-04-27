@@ -124,6 +124,7 @@ use std::sync::{Arc, Barrier, Mutex};
 use std::time::Duration;
 
 use device_manager::DeviceManager;
+use device_manager::persist::VirtioDeviceState;
 use event_manager::{EventManager as BaseEventManager, EventOps, Events, MutEventSubscriber};
 use seccomp::BpfProgram;
 use snapshot::Persist;
@@ -146,6 +147,7 @@ use crate::devices::virtio::device::VirtioDeviceType;
 use crate::devices::virtio::mem::device::VirtioMem;
 use crate::devices::virtio::mem::{VIRTIO_MEM_DEV_ID, VirtioMemError, VirtioMemStatus};
 use crate::devices::virtio::net::Net;
+use crate::devices::virtio::net::persist::{NetState, NetConstructorArgs};
 use crate::devices::virtio::pmem::device::Pmem;
 use crate::devices::virtio::rng::Entropy;
 use crate::devices::virtio::vsock::{Vsock, VsockUnixBackend};
@@ -654,7 +656,7 @@ impl Vmm {
     fn reset_net_states(&mut self, net_states: &[VirtioDeviceState<NetState>]) -> Result<(), MicrovmStateError> {
        for net_state in net_states {
            self.device_manager
-               .with_virtio_device(&net_state.device_id, |net| {
+               .with_virtio_device(&net_state.device_id, |net: &mut Net| {
                    let ctor_args = NetConstructorArgs {
                        mem: self.vm.common.guest_memory.clone(),
                        mmds: net.mmds_ns.as_ref().map(|ns| ns.mmds.clone())
@@ -664,7 +666,7 @@ impl Vmm {
                .map_err(|_| MicrovmStateError::DeviceNotFound(net_state.device_id.clone()))?
                .map_err(MicrovmStateError::ResetNetState)?;
        } 
-       Ok()
+       Ok(())
     }
 
     /// Dumps CPU configuration.

@@ -932,6 +932,14 @@ impl Net {
 
         Ok(())
     }
+
+    pub(crate) fn reset_buffers(&mut self) -> Result<(), IoVecError> {
+        self.rx_frame_buf = [0u8; MAX_BUFFER_SIZE];
+        self.tx_frame_headers = [0u8; frame_hdr_len()];
+        self.tx_buffer = Default::default();
+        self.rx_buffer = RxBuffers::new()?;
+        Ok(())
+    }
 }
 
 impl VirtioDevice for Net {

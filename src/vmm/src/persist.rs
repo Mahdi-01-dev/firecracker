@@ -48,6 +48,7 @@ use crate::vstate::memory::{
 };
 use crate::vstate::vcpu::{VcpuSendEventError, VcpuState};
 use crate::vstate::vm::{VmError, VmState};
+use crate::devices::virtio::net::persist::NetPersistError;
 use crate::{EventManager, Vmm, vstate};
 
 /// Holds information related to the VM that is not part of VmState.
@@ -145,7 +146,7 @@ pub enum MicrovmStateError {
     /// Cannot restore Vcpu state: {0}
     RestoreVcpuState(vstate::vcpu::VcpuError),
     /// Cannot reset Net state: {0}
-    ResetNetState(devices::virtio::net::NetPersistError),
+    ResetNetState(NetPersistError),
     /// Cannot save Vcpu state: {0}
     SaveVcpuState(vstate::vcpu::VcpuError),
     /// Cannot save Vm state: {0}
