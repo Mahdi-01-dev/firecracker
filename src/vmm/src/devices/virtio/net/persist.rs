@@ -146,8 +146,8 @@ impl Net{
         state: &NetState,
     ) -> Result<(), NetPersistError> {
         // RateLimiter::restore() can fail at creating a timerfd.
-        let rx_rate_limiter = RateLimiter::restore((), &state.rx_rate_limiter_state)?;
-        let tx_rate_limiter = RateLimiter::restore((), &state.tx_rate_limiter_state)?;
+        self.rx_rate_limiter = RateLimiter::restore((), &state.rx_rate_limiter_state)?;
+        self.tx_rate_limiter = RateLimiter::restore((), &state.tx_rate_limiter_state)?;
 
         // We trust the MMIODeviceManager::restore to pass us an MMDS data store reference if
         // there is at least one net device having the MMDS NS present and/or the mmds version was
