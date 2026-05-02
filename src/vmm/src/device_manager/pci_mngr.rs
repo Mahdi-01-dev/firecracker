@@ -246,6 +246,18 @@ pub struct VirtioDeviceState<T> {
     pub transport_state: VirtioPciDeviceState,
 }
 
+impl<T> super::persist::VirtioDeviceStateView for VirtioDeviceState<T> {
+    type DeviceState = T;
+
+    fn device_id(&self) -> &str {
+        &self.device_id
+    }
+
+    fn device_state(&self) -> &Self::DeviceState {
+        &self.device_state
+    }
+}
+
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct PciDevicesState {
     /// Whether PCI is enabled

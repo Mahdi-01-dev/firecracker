@@ -811,8 +811,15 @@ pub fn reset_to_snapshot(
         .restore_state(&microvm_state.vm_state)
         .map_err(ResetSnapshotError::RestoreVmState)?;
 
+    info!("Calling reset_net_states with mmio_state");
     vmm.reset_net_states(&microvm_state.device_states.mmio_state.net_devices)
         .map_err(ResetSnapshotError::ResetNetStates)?;
+    info!("Finished calling reset_net_states with mmio_state");
+
+    info!("Calling reset_net_states with pci_state");
+    vmm.reset_net_states(&microvm_state.device_states.pci_state.net_devices)
+        .map_err(ResetSnapshotError::ResetNetStates)?;
+    info!("Finished calling reset_net_states with pci_state");
 
     let page_ranges: Vec<VirtualAddressRange> = {
         let reader = BufReader::new(&stream);

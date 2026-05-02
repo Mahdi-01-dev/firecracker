@@ -124,7 +124,7 @@ use std::sync::{Arc, Barrier, Mutex};
 use std::time::Duration;
 
 use device_manager::DeviceManager;
-use device_manager::persist::VirtioDeviceState;
+use crate::device_manager::persist::VirtioDeviceStateView;
 use event_manager::{EventManager as BaseEventManager, EventOps, Events, MutEventSubscriber};
 use seccomp::BpfProgram;
 use snapshot::Persist;
@@ -653,17 +653,34 @@ impl Vmm {
         Ok(())
     }
 
-    fn reset_net_states(&mut self, net_states: &[VirtioDeviceState<NetState>]) -> Result<(), MicrovmStateError> {
+    fn reset_net_states<S>(
+        &mut self, 
+        net_states: &[S],
+    )-> Result<(), MicrovmStateError> 
+    where 
+        S: VirtioDeviceStateView<DeviceState = NetState>, 
+    {
        for net_state in net_states {
+           let device_id = net_state.device_id().to_string();
+
            self.device_manager
-               .with_virtio_device(&net_state.device_id, |net: &mut Net| {
+               .with_virtio_device(&device_id, |net: &mut Net| {
                    let ctor_args = NetConstructorArgs {
                        mem: self.vm.common.guest_memory.clone(),
                        mmds: net.mmds_ns.as_ref().map(|ns| ns.mmds.clone())
                    };
-                   net.reset(ctor_args, &net_state.device_state)
+
+                   info!("Calling reset() on Net device with id: {}", device_id);
+
+                    let result = net.reset(ctor_args, net_state.device_state());
+
+                    if result.is_ok() {
+                        info!("Finished calling reset() on Net device with id: {}", &device_id);
+                    }
+
+                    result
                })
-               .map_err(|_| MicrovmStateError::DeviceNotFound(net_state.device_id.clone()))?
+               .map_err(|_| MicrovmStateError::DeviceNotFound(device_id.clone()))?
                .map_err(MicrovmStateError::ResetNetState)?;
        } 
        Ok(())

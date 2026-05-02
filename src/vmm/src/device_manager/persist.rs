@@ -45,6 +45,14 @@ use crate::vmm_config::memory_hotplug::MemoryHotplugConfig;
 use crate::vstate::memory::GuestMemoryMmap;
 use crate::{EventManager, Vm};
 
+/// Common view over persisted VirtIO device state, independent of transport.
+pub(crate) trait VirtioDeviceStateView {
+    type DeviceState;
+
+    fn device_id(&self) -> &str;
+    fn device_state(&self) -> &Self::DeviceState;
+}
+
 /// Holds the state of a MMIO VirtIO device
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VirtioDeviceState<T> {
@@ -56,6 +64,18 @@ pub struct VirtioDeviceState<T> {
     pub transport_state: MmioTransportState,
     /// VmmResources.
     pub device_info: MMIODeviceInfo,
+}
+
+impl<T> VirtioDeviceStateView for VirtioDeviceState<T> {
+    type DeviceState = T;
+
+    fn device_id(&self) -> &str {
+        &self.device_id
+    }
+
+    fn device_state(&self) -> &Self::DeviceState {
+        &self.device_state
+    }
 }
 
 /// Holds the state of a legacy device connected to the MMIO space.
