@@ -13,11 +13,12 @@ use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
 use libc::{EAGAIN, iovec};
-use log::{error, info};
+use crate::logger::{error, info, warn};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::NET_QUEUE_MAX_SIZE;
 use crate::devices::virtio::ActivateError;
+use crate::devices::virtio::persist::PersistError as VirtioStateError;
 use crate::devices::virtio::device::{ActiveState, DeviceState, VirtioDevice, VirtioDeviceType};
 use crate::devices::virtio::generated::virtio_config::VIRTIO_F_VERSION_1;
 use crate::devices::virtio::generated::virtio_net::{
@@ -34,6 +35,7 @@ use crate::devices::virtio::net::tap::Tap;
 use crate::devices::virtio::net::{
     MAX_BUFFER_SIZE, NET_QUEUE_SIZES, NetError, NetQueue, RX_INDEX, TX_INDEX, generated,
 };
+use crate::devices::virtio::net::persist::NetPersistError;
 use crate::devices::virtio::queue::{DescriptorChain, InvalidAvailIdx, Queue};
 use crate::devices::virtio::transport::{VirtioInterrupt, VirtioInterruptType};
 use crate::devices::{DeviceError, report_net_event_fail};
@@ -938,6 +940,34 @@ impl Net {
         self.tx_frame_headers = [0u8; frame_hdr_len()];
         self.tx_buffer = Default::default();
         self.rx_buffer = RxBuffers::new()?;
+        Ok(())
+    }
+
+    pub fn apply_activation_state(
+        &mut self,
+        mem: GuestMemoryMmap,
+    ) -> Result<(), NetPersistError> {
+        for q in self.queues.iter_mut() {
+            q.initialize(&mem)
+                .map_err(|err| {
+                    NetPersistError::VirtioState(VirtioStateError::QueueConstruction(err))
+                })?;
+        }
+
+        let event_idx = self.has_feature(u64::from(VIRTIO_RING_F_EVENT_IDX));
+        if event_idx {
+            for queue in &mut self.queues {
+                queue.enable_notif_suppression();
+            }
+        }
+
+        let supported_flags: u32 = Net::build_tap_offload_features(self.acked_features);
+        self.tap
+            .set_offload(supported_flags)
+            .map_err(NetPersistError::TapSetOffload)?;
+
+        self.rx_buffer.min_buffer_size = self.minimum_rx_buffer_size();
+
         Ok(())
     }
 }
