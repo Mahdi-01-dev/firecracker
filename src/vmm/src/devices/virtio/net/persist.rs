@@ -5,6 +5,7 @@
 
 use std::io;
 use std::sync::{Arc, Mutex};
+use crate::logger::{info, warn};
 
 use serde::{Deserialize, Serialize};
 
@@ -145,6 +146,22 @@ impl Net{
         constructor_args: NetConstructorArgs,
         state: &NetState,
     ) -> Result<(), NetPersistError> {
+        info!(
+            "net reset: starting id={} snapshot_id={} snapshot_activated={} snapshot_queues={} mmds_present={}",
+            self.id,
+            state.id,
+            state.virtio_state.activated,
+            state.virtio_state.queues.len(),
+            state.mmds_ns.is_some(),
+        );
+
+        self.log_queue_reset_state("before-reset");
+
+        let interrupt = self
+            .device_state
+            .active_state()
+            .map(|active| active.interrupt.clone());
+
         // RateLimiter::restore() can fail at creating a timerfd.
         self.rx_rate_limiter = RateLimiter::restore((), &state.rx_rate_limiter_state)?;
         self.tx_rate_limiter = RateLimiter::restore((), &state.tx_rate_limiter_state)?;
@@ -183,7 +200,29 @@ impl Net{
         }
         self.guest_mac = state.config_space.guest_mac;
 
+        self.log_queue_reset_state("after-build-queues");
+
         self.reset_buffers()?;
+
+        self.apply_activation_state(constructor_args.mem.clone())?;
+
+        self.log_queue_reset_state("after-reapply-activation-state");
+
+        if let Some(interrupt) = interrupt {
+            self.device_state = DeviceState::Activated(ActiveState {
+                mem: constructor_args.mem,
+                interrupt,
+            });
+        } else {
+            warn!(
+                "net reset: device {} had no active interrupt state before reset; leaving device_state unchanged",
+                self.id
+            );
+        }
+
+        self.log_queue_reset_state("after-device-state-update");
+
+        info!("net reset: completed id={}", self.id);
 
         Ok(())
     }
