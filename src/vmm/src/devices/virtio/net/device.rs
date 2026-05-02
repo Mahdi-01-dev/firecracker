@@ -970,6 +970,101 @@ impl Net {
 
         Ok(())
     }
+
+    pub fn log_queue_reset_state(&self, stage: &str) {
+        info!(
+            "net reset [{}]: id={} activated={} avail_features={:#x} acked_features={:#x} guest_mac={:?}",
+            stage,
+            self.id,
+            self.device_state.is_activated(),
+            self.avail_features,
+            self.acked_features,
+            self.guest_mac,
+        );
+
+        for (index, queue) in self.queues.iter().enumerate() {
+            let queue_name = match index {
+                RX_INDEX => "rx",
+                TX_INDEX => "tx",
+                _ => "unknown",
+            };
+
+            if queue.avail_ring_ptr.is_null() {
+                warn!(
+                    "net reset [{}]: queue={}({}) ready={} size={} max_size={} next_avail={} next_used={} num_added={} \
+                     desc_gpa={:#x} avail_gpa={:#x} used_gpa={:#x} avail_ptr=NULL used_ptr={:p} desc_ptr={:p}",
+                    stage,
+                    index,
+                    queue_name,
+                    queue.ready,
+                    queue.size,
+                    queue.max_size,
+                    queue.next_avail.0,
+                    queue.next_used.0,
+                    queue.num_added.0,
+                    queue.desc_table_address.0,
+                    queue.avail_ring_address.0,
+                    queue.used_ring_address.0,
+                    queue.used_ring_ptr,
+                    queue.desc_table_ptr,
+                );
+                continue;
+            }
+
+            let avail_idx = queue.avail_ring_idx_get();
+            let pending_len = queue.len();
+
+            if pending_len > queue.size {
+                warn!(
+                    "net reset [{}]: INVALID queue={}({}) ready={} size={} max_size={} \
+                     avail_idx={} next_avail={} pending_len={} next_used={} num_added={} notif_suppression={} \
+                     desc_gpa={:#x} avail_gpa={:#x} used_gpa={:#x} desc_ptr={:p} avail_ptr={:p} used_ptr={:p}",
+                    stage,
+                    index,
+                    queue_name,
+                    queue.ready,
+                    queue.size,
+                    queue.max_size,
+                    avail_idx,
+                    queue.next_avail.0,
+                    pending_len,
+                    queue.next_used.0,
+                    queue.num_added.0,
+                    queue.uses_notif_suppression,
+                    queue.desc_table_address.0,
+                    queue.avail_ring_address.0,
+                    queue.used_ring_address.0,
+                    queue.desc_table_ptr,
+                    queue.avail_ring_ptr,
+                    queue.used_ring_ptr,
+                );
+            } else {
+                info!(
+                    "net reset [{}]: queue={}({}) ready={} size={} max_size={} \
+                     avail_idx={} next_avail={} pending_len={} next_used={} num_added={} notif_suppression={} \
+                     desc_gpa={:#x} avail_gpa={:#x} used_gpa={:#x} desc_ptr={:p} avail_ptr={:p} used_ptr={:p}",
+                    stage,
+                    index,
+                    queue_name,
+                    queue.ready,
+                    queue.size,
+                    queue.max_size,
+                    avail_idx,
+                    queue.next_avail.0,
+                    pending_len,
+                    queue.next_used.0,
+                    queue.num_added.0,
+                    queue.uses_notif_suppression,
+                    queue.desc_table_address.0,
+                    queue.avail_ring_address.0,
+                    queue.used_ring_address.0,
+                    queue.desc_table_ptr,
+                    queue.avail_ring_ptr,
+                    queue.used_ring_ptr,
+                );
+            }
+        }
+    }
 }
 
 impl VirtioDevice for Net {
