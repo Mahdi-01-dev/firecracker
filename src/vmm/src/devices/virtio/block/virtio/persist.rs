@@ -3,6 +3,8 @@
 
 //! Defines the structures needed for saving/restoring block devices.
 
+use log::warn;
+
 use device::ConfigSpace;
 use serde::{Deserialize, Serialize};
 use vmm_sys_util::eventfd::EventFd;
@@ -135,6 +137,79 @@ impl Persist<'_> for VirtioBlock {
             is_io_engine_throttled: false,
             metrics: BlockMetricsPerDevice::alloc(state.id.clone()),
         })
+    }
+}
+
+impl VirtioBlock {
+    fn reset(
+        &mut self,
+        constructor_args: BlockConstructorArgs,
+        state: VirtioBlockState,
+    ) -> Result<(), VirtioBlockError> {
+        let interrupt = self
+            .device_state
+            .active_state()
+            .map(|active| active.interrupt.clone());
+
+        let is_read_only = state.virtio_state.avail_features & (1u64 << VIRTIO_BLK_F_RO) != 0;
+
+        let snapshot_file_engine_type: FileEngineType = state.file_engine_type.into();
+        let current_file_engine_type = self.file_engine_type();
+        if snapshot_file_engine_type != current_file_engine_type {
+            warn!(
+                "block reset: refusing to change file engine type for device_id={} current={:?} snapshot={:?}",
+                self.id, current_file_engine_type, snapshot_file_engine_type
+            );
+            return Err(VirtioBlockError::Config);
+        }
+
+        self.prepare_reset()?;
+
+        self.rate_limiter = RateLimiter::restore((), &state.rate_limiter_state)
+            .map_err(VirtioBlockError::RateLimiter)?;
+
+        self.disk.update(state.disk_path.clone(), is_read_only)?;
+
+        self.queues = state
+            .virtio_state
+            .build_queues_checked(
+                &constructor_args.mem,
+                VirtioDeviceType::Block,
+                BLOCK_NUM_QUEUES,
+                FIRECRACKER_MAX_QUEUE_SIZE,
+            )
+            .map_err(VirtioBlockError::Persist)?;
+
+        self.avail_features = state.virtio_state.avail_features;
+        self.acked_features = state.virtio_state.acked_features;
+
+        self.config_space = ConfigSpace {
+            capacity: self.disk.nsectors.to_le(),
+        };
+
+        self.read_only = is_read_only;
+        self.is_io_engine_throttled = false;
+
+        if state.virtio_state.activated {
+            self.apply_activation_state(&constructor_args.mem)?;
+
+            if let Some(interrupt) = interrupt {
+                self.device_state = DeviceState::Activated(ActiveState {
+                    mem: constructor_args.mem,
+                    interrupt,
+                });
+            } else {
+                warn!(
+                    "block reset: snapshot state is activated, but current device had no active interrupt state; device_id={}",
+                    self.id
+                );
+                self.device_state = DeviceState::Inactive;
+            }
+        } else {
+            self.device_state = DeviceState::Inactive;
+        }
+
+        Ok(())
     }
 }
 

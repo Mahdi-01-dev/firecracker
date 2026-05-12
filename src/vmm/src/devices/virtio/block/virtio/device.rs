@@ -23,6 +23,7 @@ use super::io::async_io;
 use super::request::*;
 use super::{BLOCK_QUEUE_SIZES, SECTOR_SHIFT, SECTOR_SIZE, VirtioBlockError, io as block_io};
 use crate::devices::virtio::ActivateError;
+use crate::devices::virtio::persist::PersistError as VirtioStateError;
 use crate::devices::virtio::block::CacheType;
 use crate::devices::virtio::block::virtio::metrics::{BlockDeviceMetrics, BlockMetricsPerDevice};
 use crate::devices::virtio::device::{ActiveState, DeviceState, VirtioDevice, VirtioDeviceType};
@@ -578,6 +579,56 @@ impl VirtioBlock {
         if let FileEngine::Async(ref _engine) = self.disk.file_engine {
             self.process_async_completion_queue();
         }
+    }
+
+    fn drain_queue_evts(&self) {
+        for (idx, event) in self.queue_evts.iter().enumerate() {
+            loop {
+                match event.read() {
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(err) => {
+                        warn!(
+                            "block reset: failed draining queue event device_id={} queue={} err={:?}",
+                            self.id, idx, err
+                        );
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    pub fn apply_activation_state(
+        &mut self,
+        mem: &GuestMemoryMmap,
+    ) -> Result<(), VirtioBlockError> {
+        for q in self.queues.iter_mut() {
+            q.initialize(mem)
+                .map_err(|err| {
+                    VirtioBlockError::Persist(VirtioStateError::QueueConstruction(err))
+                })?;
+        }
+
+        let event_idx = self.has_feature(u64::from(VIRTIO_RING_F_EVENT_IDX));
+        if event_idx {
+            for queue in &mut self.queues {
+                queue.enable_notif_suppression();
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn prepare_reset(&mut self) -> Result<(), VirtioBlockError> {
+        self.disk
+            .file_engine
+            .drain_and_flush(true)
+            .map_err(VirtioBlockError::FileEngine)?;
+
+        self.drain_queue_evts();
+
+        Ok(())
     }
 }
 
