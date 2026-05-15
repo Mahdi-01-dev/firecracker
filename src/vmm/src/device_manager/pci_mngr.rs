@@ -21,7 +21,8 @@ use crate::devices::virtio::device::{VirtioDevice, VirtioDeviceType};
 use crate::devices::virtio::mem::VirtioMem;
 use crate::devices::virtio::mem::persist::{VirtioMemConstructorArgs, VirtioMemState};
 use crate::devices::virtio::net::Net;
-use crate::devices::virtio::net::persist::{NetConstructorArgs, NetState};
+use crate::devices::virtio::net::persist::{NetConstructorArgs, NetPersistError, NetState};
+use crate::mmds::data_store::Mmds;
 use crate::devices::virtio::pmem::device::Pmem;
 use crate::devices::virtio::pmem::persist::{PmemConstructorArgs, PmemState};
 use crate::devices::virtio::rng::Entropy;
@@ -67,11 +68,21 @@ pub enum PciManagerError {
     Kvm(#[from] vmm_sys_util::errno::Error),
 }
 
+#[derive(Debug, thiserror::Error, displaydoc::Display)]
+pub enum ResetNetDevicesError {
+    /// Could not find device: {topology}
+    DeviceNotFound { topology: String },
+
+    /// Failed to reset net device: {0}
+    Net(#[from] NetPersistError),
+}
+
 impl PciDevices {
     pub fn new() -> Self {
         Default::default()
     }
 
+    pub fn attach_pci_segment(&mut self, vm: &Arc<Vm>) -> Result<(), PciManagerError> {
         // We only support a single PCIe segment. Calling this function twice is a Firecracker
         // internal error.
         assert!(self.pci_segment.is_none());
@@ -245,12 +256,69 @@ impl PciDevices {
             .collect()
     }
 
+    pub fn virtio_devices_by_bdf(
+        &self,
+        filter_type: VirtioDeviceType,
+    ) -> HashMap<u32, Arc<Mutex<dyn VirtioDevice>>> {
+        self.virtio_devices
+            .iter()
+            .filter_map(|((device_type, _), pci_device)| {
+                if *device_type != filter_type {
+                    return None;
+                }
+
+                let pci_device = pci_device.lock().expect("Poisoned lock");
+
+                Some((
+                    pci_device.state().pci_device_bdf.into(),
+                    pci_device.virtio_device(),
+                ))
+            })
+            .collect()
+    }
+
     pub fn for_each_virtio_device(&self, mut f: impl FnMut(VirtioDeviceType, &dyn VirtioDevice)) {
         for ((device_type, _), pci_device) in &self.virtio_devices {
             let device_arc = pci_device.lock().expect("Poisoned lock").virtio_device();
             let device = device_arc.lock().expect("Poisoned lock");
             f(*device_type, &*device);
         }
+    }
+
+    pub fn reset_net_devices(
+        &self,
+        mem: GuestMemoryMmap,
+        states: &[VirtioDeviceState<NetState>],
+        mmds: Option<Arc<Mutex<Mmds>>>,
+    ) -> Result<(), ResetNetDevicesError> {
+        let net_devices = self.virtio_devices_by_bdf(VirtioDeviceType::Net);
+
+        for state in states {
+            let virtio_dev =
+                net_devices
+                    .get(&state.pci_device_bdf)
+                    .ok_or_else(|| ResetNetDevicesError::DeviceNotFound {
+                        topology: format!("pci_bdf={}", state.pci_device_bdf),
+                    })?;
+
+            let mut dev = virtio_dev.lock().expect("Poisoned lock");
+
+            let net = dev
+                .as_mut_any()
+                .downcast_mut::<Net>()
+                .expect("PCI device advertised Net but did not downcast to Net");
+
+            let ctor_args = NetConstructorArgs {
+                mem: mem.clone(),
+                mmds: mmds
+                    .clone()
+                    .or_else(|| net.mmds_ns.as_ref().map(|ns| ns.mmds.clone())),
+            };
+
+            net.reset(ctor_args, &state.device_state)?;
+        }
+
+        Ok(())
     }
 }
 
