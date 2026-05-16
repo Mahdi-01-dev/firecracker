@@ -294,12 +294,11 @@ impl PciDevices {
         let net_devices = self.virtio_devices_by_bdf(VirtioDeviceType::Net);
 
         for state in states {
-            let virtio_dev =
-                net_devices
-                    .get(&state.pci_device_bdf)
-                    .ok_or_else(|| ResetNetDevicesError::DeviceNotFound {
-                        topology: format!("pci_bdf={}", state.pci_device_bdf),
-                    })?;
+            let virtio_dev = net_devices
+                .get(&state.pci_device_bdf)
+                .ok_or_else(|| ResetNetDevicesError::DeviceNotFound {
+                    topology: format!("pci_bdf={}", state.pci_device_bdf),
+                })?;
 
             let mut dev = virtio_dev.lock().expect("Poisoned lock");
 
