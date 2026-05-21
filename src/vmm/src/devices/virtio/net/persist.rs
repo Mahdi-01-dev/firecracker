@@ -68,6 +68,11 @@ pub enum NetPersistError {
     TapSetOffload(TapError),
     /// IoVecBuffer(Mut) error: {0}
     IoVecError(#[from] super::IoVecError),
+    /// Tap interface name mismatch: current={current}, target={target}
+    TapMismatch{
+        current: String,
+        target: String,
+    },
 }
 
 impl Persist<'_> for Net {
@@ -154,6 +159,15 @@ impl Net {
             state.virtio_state.queues.len(),
             state.mmds_ns.is_some(),
         );
+
+        let current_if_name = self.iface_name();
+
+        if current_if_name != state.tap_if_name {
+           return Err(NetPersistError::TapMismatch {
+               current: current_if_name,
+               target: state.tap_if_name.clone(),
+           });
+        }
 
         self.log_queue_reset_state("before-reset");
 
