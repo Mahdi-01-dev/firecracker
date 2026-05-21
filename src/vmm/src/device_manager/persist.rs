@@ -5,6 +5,7 @@
 
 use std::fmt::{self, Debug};
 use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
 
 use log::warn;
 use serde::{Deserialize, Serialize};
@@ -27,8 +28,9 @@ use crate::devices::virtio::device::{VirtioDevice, VirtioDeviceType};
 use crate::devices::virtio::mem::VirtioMem;
 use crate::devices::virtio::mem::persist::{VirtioMemConstructorArgs, VirtioMemState};
 use crate::devices::virtio::net::Net;
-use crate::devices::virtio::net::persist::{NetConstructorArgs, NetState};
+use crate::devices::virtio::net::persist::{NetConstructorArgs, NetPersistError, NetState};
 use crate::devices::virtio::persist::{MmioTransportConstructorArgs, MmioTransportState};
+use crate::mmds::data_store::Mmds;
 use crate::devices::virtio::pmem::device::Pmem;
 use crate::devices::virtio::pmem::persist::{PmemConstructorArgs, PmemState};
 use crate::devices::virtio::rng::Entropy;
@@ -46,11 +48,24 @@ use crate::vstate::memory::GuestMemoryMmap;
 use crate::{EventManager, Vm};
 
 /// Common view over persisted VirtIO device state, independent of transport.
-pub(crate) trait VirtioDeviceStateView {
+pub trait VirtioDeviceStateView {
     type DeviceState;
 
     fn device_id(&self) -> &str;
     fn device_state(&self) -> &Self::DeviceState;
+    fn topology_key(&self) -> u64;
+}
+
+#[derive(Debug, thiserror::Error, displaydoc::Display)]
+pub enum ResetNetDevicesError {
+    /// Could not find device: {topology}
+    DeviceNotFound { topology: String },
+
+    /// Device at {topology} was expected to be a Net device, but downcast failed.
+    DowncastNet { topology: String },
+
+    /// Failed to reset net device: {0}
+    Net(#[from] NetPersistError),
 }
 
 /// Holds the state of a MMIO VirtIO device
@@ -75,6 +90,10 @@ impl<T> VirtioDeviceStateView for VirtioDeviceState<T> {
 
     fn device_state(&self) -> &Self::DeviceState {
         &self.device_state
+    }
+
+    fn topology_key(&self) -> u64 {
+        self.device_info.addr
     }
 }
 
@@ -578,6 +597,63 @@ impl<'a> Persist<'a> for MMIODeviceManager {
         }
 
         Ok(dev_manager)
+    }
+}
+
+fn reset_net_devices_common(
+    mem: GuestMemoryMmap,
+    net_states: &[impl VirtioDeviceStateView<DeviceState = NetState>],
+    net_devices: &HashMap<u64, Arc<Mutex<dyn VirtioDevice>>>,  
+    mmds: Option<Arc<Mutex<Mmds>>>,
+) -> Result<(), ResetNetDevicesError> {
+    for state in net_states {
+        let key = state.topology_key();
+
+        let virtio_dev = net_devices
+            .get(&key)
+            .ok_or_else(|| ResetNetDevicesError::DeviceNotFound {
+            topology: format!("key={}", key),
+            })?;
+
+        let mut dev = virtio_dev.lock().expect("Poisoned lock");
+
+        let net = dev
+            .as_mut_any()
+            .downcast_mut::<Net>()
+            .ok_or_else(|| ResetNetDevicesError::DowncastNet {
+                topology: format!("key={}", key),
+            })?;
+
+        let ctor_args = NetConstructorArgs {
+            mem: mem.clone(),
+            mmds: mmds.clone(),
+        };
+
+        net.reset(ctor_args, state.device_state())?;
+    }
+
+    Ok(())
+}
+
+impl super::DeviceManager {
+    pub fn reset_net_devices(
+        &mut self,
+        mem: GuestMemoryMmap,
+        net_states: &[impl VirtioDeviceStateView<DeviceState = NetState>],
+        mmds: Option<Arc<Mutex<Mmds>>>,
+    ) -> Result<(), ResetNetDevicesError> {
+        let net_devices = if self.is_pci_enabled() {
+            self.pci_devices.virtio_devices_by_bdf(VirtioDeviceType::Net)
+        } else {
+            self.mmio_devices.virtio_devices_by_addr(VirtioDeviceType::Net)
+        };
+
+        reset_net_devices_common(
+           mem,
+           net_states,
+           &net_devices,
+           mmds
+        )
     }
 }
 

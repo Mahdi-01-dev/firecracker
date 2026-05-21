@@ -73,6 +73,9 @@ pub enum ResetNetDevicesError {
     /// Could not find device: {topology}
     DeviceNotFound { topology: String },
 
+    /// Device at {topology} was expected to be a Net device, but downcast failed.
+    DowncastNet { topology: String },
+
     /// Failed to reset net device: {0}
     Net(#[from] NetPersistError),
 }
@@ -259,7 +262,7 @@ impl PciDevices {
     pub fn virtio_devices_by_bdf(
         &self,
         filter_type: VirtioDeviceType,
-    ) -> HashMap<u32, Arc<Mutex<dyn VirtioDevice>>> {
+    ) -> HashMap<u64, Arc<Mutex<dyn VirtioDevice>>> {
         self.virtio_devices
             .iter()
             .filter_map(|((device_type, _), pci_device)| {
@@ -270,7 +273,7 @@ impl PciDevices {
                 let pci_device = pci_device.lock().expect("Poisoned lock");
 
                 Some((
-                    pci_device.state().pci_device_bdf.into(),
+                    u64::from(u32::from(pci_device.state().pci_device_bdf)),
                     pci_device.virtio_device(),
                 ))
             })
@@ -295,7 +298,7 @@ impl PciDevices {
 
         for state in states {
             let virtio_dev = net_devices
-                .get(&state.pci_device_bdf)
+                .get(&u64::from(state.pci_device_bdf))
                 .ok_or_else(|| ResetNetDevicesError::DeviceNotFound {
                     topology: format!("pci_bdf={}", state.pci_device_bdf),
                 })?;
@@ -342,6 +345,10 @@ impl<T> super::persist::VirtioDeviceStateView for VirtioDeviceState<T> {
 
     fn device_state(&self) -> &Self::DeviceState {
         &self.device_state
+    }
+
+    fn topology_key(&self) -> u64 {
+        u64::from(self.pci_device_bdf)
     }
 }
 

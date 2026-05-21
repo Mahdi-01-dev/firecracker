@@ -134,7 +134,7 @@ impl Persist<'_> for Net {
     }
 }
 
-impl Net{
+impl Net {
     // Resets the device state in-place using the provided snapshot state.
     // Mirrors `Net::restore()`, but applies the state to an existing device
     // instead of creating a new one.
