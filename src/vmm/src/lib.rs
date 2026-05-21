@@ -123,8 +123,8 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Barrier, Mutex};
 use std::time::Duration;
 
-use device_manager::DeviceManager;
-use crate::device_manager::persist::VirtioDeviceStateView;
+use device_manager::{DeviceManager, DevicesState};
+use crate::device_manager::persist::{VirtioDeviceStateView, MmdsState};
 use event_manager::{EventManager as BaseEventManager, EventOps, Events, MutEventSubscriber};
 use seccomp::BpfProgram;
 use snapshot::Persist;
@@ -649,6 +649,81 @@ impl Vmm {
                 VcpuResponse::NotAllowed(reason) => Err(MicrovmStateError::NotAllowed(reason)),
                 _ => Err(MicrovmStateError::UnexpectedVcpuResponse),
             })?;
+
+        Ok(())
+    }
+
+    fn get_target_mmds(
+        &self,
+        net_states: &[impl VirtioDeviceStateView<DeviceState = NetState>],
+        target_mmds_state: Option<&MmdsState>,
+    ) -> Result<Option<Arc<Mutex<Mmds>>>, MicrovmStateError> {
+        let target_has_mmds = net_states
+            .iter()
+            .any(|state| state.device_state().mmds_ns.is_some());
+
+        if !target_has_mmds {
+            if self.get_mmds().is_some() {
+                warn!(
+                    "net reset: current VM has MMDS, but target snapshot has no MMDS-enabled net devices"
+                );
+            }
+
+            return Ok(None);
+        }
+
+        let mmds = self
+            .get_mmds()
+            .ok_or(MicrovmStateError::MissingMmdsForNetReset)?;
+
+        if let Some(state) = target_mmds_state {
+            let guard = mmds.lock().expect("Poisoned lock");
+
+            if guard.version() != state.version || guard.imds_compat() != state.imds_compat {
+                return Err(MicrovmStateError::MmdsConfigMismatch);
+            }
+        } else {
+            warn!(
+                "net reset: target snapshot has per-net MMDS state but no global MMDS state"
+            );
+        }
+
+        Ok(Some(mmds))
+    }
+
+    fn reset_net_devices(
+        &mut self,
+        devices_state: &DevicesState
+    ) -> Result<(), MicrovmStateError> {
+        let mem = self.vm.common.guest_memory.clone();
+
+        if self.device_manager.is_pci_enabled() {
+            let target_mmds = self.get_target_mmds(
+                &devices_state.pci_state.net_devices,
+                devices_state.pci_state.mmds.as_ref(),
+            )?;
+
+            self.device_manager
+                .reset_net_devices(
+                    mem,
+                    &devices_state.pci_state.net_devices,
+                    target_mmds,
+                )
+                .map_err(MicrovmStateError::ResetNetDevices)?;
+        } else {
+            let target_mmds = self.get_target_mmds(
+                &devices_state.mmio_state.net_devices,
+                devices_state.mmio_state.mmds.as_ref(),
+            )?;
+
+            self.device_manager
+                .reset_net_devices(
+                    mem,
+                    &devices_state.mmio_state.net_devices,
+                    target_mmds,
+                )
+                .map_err(MicrovmStateError::ResetNetDevices)?;
+        }
 
         Ok(())
     }

@@ -48,6 +48,7 @@ use crate::vstate::memory::{
 };
 use crate::vstate::vcpu::{VcpuSendEventError, VcpuState};
 use crate::vstate::vm::{VmError, VmState};
+use crate::device_manager::persist::ResetNetDevicesError;
 use crate::devices::virtio::net::persist::NetPersistError;
 use crate::{EventManager, Vmm, vstate};
 
@@ -147,6 +148,12 @@ pub enum MicrovmStateError {
     RestoreVcpuState(vstate::vcpu::VcpuError),
     /// Cannot reset Net state: {0}
     ResetNetState(NetPersistError),
+    /// Failed to reset Net devices: {0}
+    ResetNetDevices(#[from] ResetNetDevicesError),
+    /// Target snapshot requires MMDS but absent from current VMM.
+    MissingMmdsForNetReset,
+    /// Target snapshot MMDS config doesn't match current VMM's config.
+    MmdsConfigMismatch,
     /// Cannot save Vcpu state: {0}
     SaveVcpuState(vstate::vcpu::VcpuError),
     /// Cannot save Vm state: {0}
@@ -811,15 +818,18 @@ pub fn reset_to_snapshot(
         .restore_state(&microvm_state.vm_state)
         .map_err(ResetSnapshotError::RestoreVmState)?;
 
-    info!("Calling reset_net_states with mmio_state");
-    vmm.reset_net_states(&microvm_state.device_states.mmio_state.net_devices)
+    vmm.reset_net_devices(&microvm_state.device_states)
         .map_err(ResetSnapshotError::ResetNetStates)?;
-    info!("Finished calling reset_net_states with mmio_state");
 
-    info!("Calling reset_net_states with pci_state");
-    vmm.reset_net_states(&microvm_state.device_states.pci_state.net_devices)
-        .map_err(ResetSnapshotError::ResetNetStates)?;
-    info!("Finished calling reset_net_states with pci_state");
+    // info!("Calling reset_net_states with mmio_state");
+    // vmm.reset_net_states(&microvm_state.device_states.mmio_state.net_devices)
+    //     .map_err(ResetSnapshotError::ResetNetStates)?;
+    // info!("Finished calling reset_net_states with mmio_state");
+    //
+    // info!("Calling reset_net_states with pci_state");
+    // vmm.reset_net_states(&microvm_state.device_states.pci_state.net_devices)
+    //     .map_err(ResetSnapshotError::ResetNetStates)?;
+    // info!("Finished calling reset_net_states with pci_state");
 
     let page_ranges: Vec<VirtualAddressRange> = {
         let reader = BufReader::new(&stream);
