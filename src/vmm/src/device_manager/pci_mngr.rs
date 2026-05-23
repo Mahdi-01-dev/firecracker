@@ -259,6 +259,27 @@ impl PciDevices {
             .collect()
     }
 
+    pub fn pci_devices_by_bdf(
+        &self,
+        filter_type: VirtioDeviceType,
+    ) -> HashMap<u64, Arc<Mutex<VirtioPciDevice>>> {
+        self.virtio_devices
+            .iter()
+            .filter_map(|((device_type, _), pci_device)| {
+                if *device_type != filter_type {
+                    return None;
+                }
+
+                let key = {
+                    let pci_device = pci_device.lock().expect("Poisoned lock");
+                    u64::from(u32::from(pci_device.state().pci_device_bdf))
+                };
+
+                Some((key, pci_device.clone()))
+            })
+            .collect()
+    }
+
     pub fn virtio_devices_by_bdf(
         &self,
         filter_type: VirtioDeviceType,
