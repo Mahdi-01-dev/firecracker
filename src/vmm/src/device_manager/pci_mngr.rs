@@ -268,6 +268,7 @@ impl PciDevices {
             .collect()
     }
 
+    /// Deprecated
     pub fn virtio_devices_by_bdf(
         &self,
         filter_type: VirtioDeviceType,

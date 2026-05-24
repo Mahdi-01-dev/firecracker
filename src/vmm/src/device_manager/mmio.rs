@@ -446,6 +446,7 @@ impl MMIODeviceManager {
             .collect()
     }
 
+    /// Deprecated
     pub fn virtio_devices_by_addr(
         &self,
         filter_type: VirtioDeviceType,

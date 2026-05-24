@@ -730,6 +730,7 @@ impl Vmm {
         Ok(())
     }
 
+    /// Deprecated
     fn reset_net_states<S>(
         &mut self, 
         net_states: &[S],

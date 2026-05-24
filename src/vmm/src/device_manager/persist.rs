@@ -604,6 +604,7 @@ impl<'a> Persist<'a> for MMIODeviceManager {
     }
 }
 
+/// Deprecated
 fn reset_net_devices_common(
     mem: GuestMemoryMmap,
     net_states: &[impl VirtioDeviceStateView<DeviceState = NetState>],
