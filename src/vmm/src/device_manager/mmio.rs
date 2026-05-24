@@ -27,9 +27,9 @@ use crate::devices::legacy::{RTCDevice, SerialDevice};
 use crate::devices::pseudo::BootTimer;
 use crate::devices::virtio::device::{VirtioDevice, VirtioDeviceType};
 use crate::devices::virtio::net::Net;
-use crate::devices::virtio::net::persist::{NetConstructorArgs, NetPersistError, NetState};
+use crate::devices::virtio::net::persist::{NetConstructorArgs, NetState};
 use crate::devices::virtio::transport::mmio::MmioTransport;
-use super::persist::VirtioDeviceState;
+use super::persist::{VirtioDeviceState, ResetNetDevicesError, VirtioDeviceStateView};
 use crate::mmds::data_store::Mmds;
 use crate::vstate::bus::{Bus, BusError};
 #[cfg(target_arch = "x86_64")]
@@ -57,15 +57,6 @@ pub enum MmioError {
     #[cfg(target_arch = "x86_64")]
     /// Failed to create AML code for device
     AmlError(#[from] aml::AmlError),
-}
-
-#[derive(Debug, thiserror::Error, displaydoc::Display)]
-pub enum ResetNetDevicesError {
-    /// Could not find device: {topology}
-    DeviceNotFound { topology: String },
-
-    /// Failed to reset net device: {0}
-    Net(#[from] NetPersistError),
 }
 
 /// This represents the size of the mmio device specified to the kernel through ACPI and as a
@@ -439,6 +430,22 @@ impl MMIODeviceManager {
             .collect()
     }
 
+    pub fn mmio_transports_by_addr(
+        &self,
+        filter_type: VirtioDeviceType,
+    ) -> HashMap<u64, Arc<Mutex<MmioTransport>>> {
+        self.virtio_devices
+            .iter()
+            .filter_map(|((device_type, _), mmio_device)| {
+                if *device_type != filter_type {
+                    return None;
+                } 
+
+                Some((mmio_device.resources.addr, mmio_device.inner.clone()))
+            })
+            .collect()
+    }
+
     pub fn virtio_devices_by_addr(
         &self,
         filter_type: VirtioDeviceType,
@@ -467,27 +474,35 @@ impl MMIODeviceManager {
         states: &[VirtioDeviceState<NetState>],
         mmds: Option<Arc<Mutex<Mmds>>>,
     ) -> Result<(), ResetNetDevicesError> {
-        let net_devices = self.virtio_devices_by_addr(VirtioDeviceType::Net);
+        let mmio_transports = self.mmio_transports_by_addr(VirtioDeviceType::Net);
 
         for state in states {
-            let virtio_dev = net_devices
-                .get(&state.device_info.addr)
+            let key = state.topology_key();
+
+            let mmio_transport = mmio_transports
+                .get(&key)
                 .ok_or_else(|| ResetNetDevicesError::DeviceNotFound {
-                    topology: format!("mmio_addr={:#x}", state.device_info.addr),
+                    topology: format!("mmio_addr={:#x}", key),
                 })?;
+
+            let virtio_dev = {
+                let mut mmio_transport = mmio_transport.lock().expect("Poisoned lock");
+                mmio_transport.reset_to_state(&state.transport_state);
+                mmio_transport.device()
+            };
 
             let mut dev = virtio_dev.lock().expect("Poisoned lock");
 
             let net = dev
                 .as_mut_any()
                 .downcast_mut::<Net>()
-                .expect("MMIO device advertised Net but did not downcast to Net");
+                .ok_or_else(|| ResetNetDevicesError::DowncastNet {
+                    topology: format!("mmio_addr={:#x}", key),
+                })?;
 
             let ctor_args = NetConstructorArgs {
                 mem: mem.clone(),
-                mmds: mmds
-                    .clone()
-                    .or_else(|| net.mmds_ns.as_ref().map(|ns| ns.mmds.clone())),
+                mmds: mmds.clone()
             };
 
             net.reset(ctor_args, &state.device_state)?;

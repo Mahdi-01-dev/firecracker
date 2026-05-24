@@ -303,12 +303,12 @@ impl PciDevices {
         states: &[VirtioDeviceState<NetState>],
         mmds: Option<Arc<Mutex<Mmds>>>,
     ) -> Result<(), ResetNetDevicesError> {
-        let net_devices = self.pci_devices_by_bdf(VirtioDeviceType::Net);
+        let pci_devices = self.pci_devices_by_bdf(VirtioDeviceType::Net);
 
         for state in states {
             let key = state.topology_key();
 
-            let pci_dev = net_devices
+            let pci_dev = pci_devices
                 .get(&key)
                 .ok_or_else(|| ResetNetDevicesError::DeviceNotFound {
                     topology: format!("pci_bdf={}", key),
