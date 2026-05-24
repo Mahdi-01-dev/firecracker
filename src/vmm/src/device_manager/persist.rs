@@ -36,6 +36,7 @@ use crate::devices::virtio::pmem::persist::{PmemConstructorArgs, PmemState};
 use crate::devices::virtio::rng::Entropy;
 use crate::devices::virtio::rng::persist::{EntropyConstructorArgs, EntropyState};
 use crate::devices::virtio::transport::mmio::{IrqTrigger, MmioTransport};
+use crate::devices::virtio::transport::pci::device::VirtioPciResetError;
 use crate::devices::virtio::vsock::persist::{
     VsockConstructorArgs, VsockState, VsockUdsConstructorArgs,
 };
@@ -63,6 +64,9 @@ pub enum ResetNetDevicesError {
 
     /// Device at {topology} was expected to be a Net device, but downcast failed.
     DowncastNet { topology: String },
+
+    /// Failed to reset PCI transport: {0}
+    PciTransport(#[from] VirtioPciResetError),
 
     /// Failed to reset net device: {0}
     Net(#[from] NetPersistError),

@@ -325,6 +325,10 @@ impl Debug for VirtioPciDevice {
 }
 
 impl VirtioPciDevice {
+    pub fn topology_key(&self) -> u64 {
+        u64::from(u32::from(self.pci_device_bdf))
+    }
+
     fn pci_configuration(
         device_type: VirtioDeviceType,
         msix_config: &Arc<Mutex<MsixConfig>>,

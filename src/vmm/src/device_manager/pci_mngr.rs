@@ -10,7 +10,7 @@ use event_manager::{MutEventSubscriber, SubscriberOps};
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 
-use super::persist::MmdsState;
+use super::persist::{MmdsState, ResetNetDevicesError, VirtioDeviceStateView};
 use crate::device_manager::DevicePersistError;
 use crate::devices::pci::PciSegment;
 use crate::devices::virtio::balloon::Balloon;
@@ -21,7 +21,7 @@ use crate::devices::virtio::device::{VirtioDevice, VirtioDeviceType};
 use crate::devices::virtio::mem::VirtioMem;
 use crate::devices::virtio::mem::persist::{VirtioMemConstructorArgs, VirtioMemState};
 use crate::devices::virtio::net::Net;
-use crate::devices::virtio::net::persist::{NetConstructorArgs, NetPersistError, NetState};
+use crate::devices::virtio::net::persist::{NetConstructorArgs, NetState};
 use crate::mmds::data_store::Mmds;
 use crate::devices::virtio::pmem::device::Pmem;
 use crate::devices::virtio::pmem::persist::{PmemConstructorArgs, PmemState};
@@ -66,18 +66,6 @@ pub enum PciManagerError {
     VirtioPciDevice(#[from] VirtioPciDeviceError),
     /// KVM error: {0}
     Kvm(#[from] vmm_sys_util::errno::Error),
-}
-
-#[derive(Debug, thiserror::Error, displaydoc::Display)]
-pub enum ResetNetDevicesError {
-    /// Could not find device: {topology}
-    DeviceNotFound { topology: String },
-
-    /// Device at {topology} was expected to be a Net device, but downcast failed.
-    DowncastNet { topology: String },
-
-    /// Failed to reset net device: {0}
-    Net(#[from] NetPersistError),
 }
 
 impl PciDevices {
@@ -259,7 +247,7 @@ impl PciDevices {
             .collect()
     }
 
-    pub fn pci_devices_by_bdf(
+    fn pci_devices_by_bdf(
         &self,
         filter_type: VirtioDeviceType,
     ) -> HashMap<u64, Arc<Mutex<VirtioPciDevice>>> {
@@ -272,7 +260,7 @@ impl PciDevices {
 
                 let key = {
                     let pci_device = pci_device.lock().expect("Poisoned lock");
-                    u64::from(u32::from(pci_device.state().pci_device_bdf))
+                    pci_device.topology_key()
                 };
 
                 Some((key, pci_device.clone()))
@@ -315,27 +303,35 @@ impl PciDevices {
         states: &[VirtioDeviceState<NetState>],
         mmds: Option<Arc<Mutex<Mmds>>>,
     ) -> Result<(), ResetNetDevicesError> {
-        let net_devices = self.virtio_devices_by_bdf(VirtioDeviceType::Net);
+        let net_devices = self.pci_devices_by_bdf(VirtioDeviceType::Net);
 
         for state in states {
-            let virtio_dev = net_devices
-                .get(&u64::from(state.pci_device_bdf))
+            let key = state.topology_key();
+
+            let pci_dev = net_devices
+                .get(&key)
                 .ok_or_else(|| ResetNetDevicesError::DeviceNotFound {
-                    topology: format!("pci_bdf={}", state.pci_device_bdf),
+                    topology: format!("pci_bdf={}", key),
                 })?;
+
+            let virtio_dev = {
+                let mut pci_dev = pci_dev.lock().expect("Poisoned lock");
+                pci_dev.reset(&state.transport_state)?;
+                pci_dev.virtio_device()
+            };
 
             let mut dev = virtio_dev.lock().expect("Poisoned lock");
 
             let net = dev
                 .as_mut_any()
                 .downcast_mut::<Net>()
-                .expect("PCI device advertised Net but did not downcast to Net");
+                .ok_or_else(|| ResetNetDevicesError::DowncastNet {
+                    topology: format!("key={}", key),
+                })?;
 
             let ctor_args = NetConstructorArgs {
                 mem: mem.clone(),
-                mmds: mmds
-                    .clone()
-                    .or_else(|| net.mmds_ns.as_ref().map(|ns| ns.mmds.clone())),
+                mmds: mmds.clone(),
             };
 
             net.reset(ctor_args, &state.device_state)?;
