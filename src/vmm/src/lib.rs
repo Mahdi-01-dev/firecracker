@@ -704,6 +704,7 @@ impl Vmm {
             )?;
 
             self.device_manager
+                .pci_devices
                 .reset_net_devices(
                     mem,
                     &devices_state.pci_state.net_devices,
@@ -717,6 +718,7 @@ impl Vmm {
             )?;
 
             self.device_manager
+                .mmio_devices
                 .reset_net_devices(
                     mem,
                     &devices_state.mmio_state.net_devices,
