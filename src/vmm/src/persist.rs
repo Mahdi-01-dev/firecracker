@@ -12,6 +12,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use utils::time::{ClockType, get_time_us};
 
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -31,7 +32,7 @@ use crate::device_manager::{DevicePersistError, DevicesState};
 use crate::io_uring::IoUring;
 use crate::io_uring::operation::{OpCode, Operation};
 use crate::io_uring::restriction::Restriction;
-use crate::logger::{info, warn};
+use crate::logger::{info, warn, debug, update_metric_with_elapsed_time, METRICS};
 use crate::resources::VmResources;
 use crate::seccomp::BpfThreadMap;
 use crate::snapshot::Snapshot;
@@ -818,8 +819,20 @@ pub fn reset_to_snapshot(
         .restore_state(&microvm_state.vm_state)
         .map_err(ResetSnapshotError::RestoreVmState)?;
 
+    let net_reset_start_time = Instant::now();
+    let net_reset_start_us = get_time_us(ClockType::Monotonic);
+
     vmm.reset_net_devices(&microvm_state.device_states)
         .map_err(ResetSnapshotError::ResetNetStates)?;
+
+    info!("Reset net devices latency: {:?}", net_reset_start_time.elapsed());
+    debug!(
+        "'reset net' VMM action took {} us.",
+        update_metric_with_elapsed_time(
+            &METRICS.latencies_us.vmm_net_reset,
+            net_reset_start_us
+        )
+    );
 
     let page_ranges: Vec<VirtualAddressRange> = {
         let reader = BufReader::new(&stream);

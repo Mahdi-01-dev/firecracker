@@ -151,15 +151,6 @@ impl Net {
         constructor_args: NetConstructorArgs,
         state: &NetState,
     ) -> Result<(), NetPersistError> {
-        info!(
-            "net reset: starting id={} snapshot_id={} snapshot_activated={} snapshot_queues={} mmds_present={}",
-            self.id,
-            state.id,
-            state.virtio_state.activated,
-            state.virtio_state.queues.len(),
-            state.mmds_ns.is_some(),
-        );
-
         let current_if_name = self.iface_name();
 
         if current_if_name != state.tap_if_name {
@@ -168,8 +159,6 @@ impl Net {
                target: state.tap_if_name.clone(),
            });
         }
-
-        self.log_queue_reset_state("before-reset");
 
         let interrupt = self
             .device_state
@@ -214,13 +203,9 @@ impl Net {
         }
         self.guest_mac = state.config_space.guest_mac;
 
-        self.log_queue_reset_state("after-build-queues");
-
         self.reset_buffers()?;
 
         self.apply_activation_state(constructor_args.mem.clone())?;
-
-        self.log_queue_reset_state("after-reapply-activation-state");
 
         if let Some(interrupt) = interrupt {
             self.device_state = DeviceState::Activated(ActiveState {
@@ -233,10 +218,6 @@ impl Net {
                 self.id
             );
         }
-
-        self.log_queue_reset_state("after-device-state-update");
-
-        info!("net reset: completed id={}", self.id);
 
         Ok(())
     }
