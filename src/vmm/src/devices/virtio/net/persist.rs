@@ -60,6 +60,8 @@ pub enum NetPersistError {
     CreateNet(#[from] super::NetError),
     /// Failed to create a rate limiter: {0}
     CreateRateLimiter(#[from] io::Error),
+    /// Failed to reset a rate limiter: {0}
+    ResetRateLimiter(io::Error),
     /// Failed to re-create the virtio state (i.e queues etc): {0}
     VirtioState(#[from] VirtioStateError),
     /// Indicator that no MMDS is associated with this device.
@@ -165,15 +167,19 @@ impl Net {
             .active_state()
             .map(|active| active.interrupt.clone());
 
-        // RateLimiter::restore() can fail at creating a timerfd.
-        self.rx_rate_limiter = RateLimiter::restore((), &state.rx_rate_limiter_state)?;
-        self.tx_rate_limiter = RateLimiter::restore((), &state.tx_rate_limiter_state)?;
+        self.rx_rate_limiter
+            .reset(&state.rx_rate_limiter_state)
+            .map_err(NetPersistError::ResetRateLimiter)?;
 
-        // We trust the MMIODeviceManager::restore to pass us an MMDS data store reference if
+        self.tx_rate_limiter
+            .reset(&state.tx_rate_limiter_state)
+            .map_err(NetPersistError::ResetRateLimiter)?;
+
+        // We trust the MMIODeviceManager::reset to pass us an MMDS data store reference if
         // there is at least one net device having the MMDS NS present and/or the mmds version was
         // persisted in the snapshot.
         if let Some(mmds_ns) = &state.mmds_ns {
-            // We're safe calling unwrap() to discard the error, as MmdsNetworkStack::restore()
+            // We're safe calling unwrap() to discard the error, as MmdsNetworkStack::reset()
             // always returns Ok.
             self.mmds_ns = Some(
                 MmdsNetworkStack::restore(

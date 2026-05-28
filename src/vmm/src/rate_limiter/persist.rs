@@ -91,6 +91,30 @@ impl Persist<'_> for RateLimiter {
     }
 }
 
+impl RateLimiter {
+    /// Resets RateLimiter state to snapshot state.
+    pub fn reset(&mut self, state: &RateLimiterState) -> Result<(), io::Error> {
+        self.ops = if let Some(ops) = state.ops.as_ref() {
+            Some(TokenBucket::restore((), ops)?)
+        } else {
+            None
+        };
+
+        self.bandwidth = if let Some(bw) = state.bandwidth.as_ref() {
+            Some(TokenBucket::restore((), bw)?)
+        } else {
+            None
+        };
+
+        self.timer_fd.arm(Duration::ZERO, None);
+        self.timer_fd.read();
+
+        self.timer_active = false;
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
