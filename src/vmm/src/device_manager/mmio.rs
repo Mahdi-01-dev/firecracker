@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 #[cfg(target_arch = "x86_64")]
 use acpi_tables::{Aml, aml};
@@ -15,7 +16,7 @@ use event_manager::SubscriberOps;
 use kvm_ioctls::IoEventAddress;
 use linux_loader::cmdline as kernel_cmdline;
 #[cfg(target_arch = "x86_64")]
-use log::debug;
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
 use vm_allocator::AllocPolicy;
 
@@ -478,6 +479,8 @@ impl MMIODeviceManager {
         let mmio_transports = self.mmio_transports_by_addr(VirtioDeviceType::Net);
 
         for state in states {
+            let device_start = Instant::now();
+
             let key = state.topology_key();
 
             let mmio_transport = mmio_transports
@@ -486,10 +489,13 @@ impl MMIODeviceManager {
                     topology: format!("mmio_addr={:#x}", key),
                 })?;
 
-            let virtio_dev = {
+            let (virtio_dev, transport_latency) = {
                 let mut mmio_transport = mmio_transport.lock().expect("Poisoned lock");
+
+                let start_time = Instant::now();
                 mmio_transport.reset_to_state(&state.transport_state);
-                mmio_transport.device()
+
+                (mmio_transport.device(), start_time.elapsed())
             };
 
             let mut dev = virtio_dev.lock().expect("Poisoned lock");
@@ -506,7 +512,17 @@ impl MMIODeviceManager {
                 mmds: mmds.clone()
             };
 
+            let start_time = Instant::now();
+
             net.reset(ctor_args, &state.device_state)?;
+
+            info!(
+                "Reset MMIO net device breakdown: address={}; total={:?}; transport={:?}; net state={:?}",
+                key,
+                device_start.elapsed(),
+                transport_latency,
+                start_time.elapsed(),
+            );
         }
 
         Ok(())

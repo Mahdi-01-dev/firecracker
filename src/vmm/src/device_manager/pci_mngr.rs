@@ -5,9 +5,10 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::DerefMut;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use event_manager::{MutEventSubscriber, SubscriberOps};
-use log::{debug, warn};
+use log::{debug, warn, info};
 use serde::{Deserialize, Serialize};
 
 use super::persist::{MmdsState, ResetNetDevicesError, VirtioDeviceStateView};
@@ -307,6 +308,8 @@ impl PciDevices {
         let pci_devices = self.pci_devices_by_bdf(VirtioDeviceType::Net);
 
         for state in states {
+            let device_start = Instant::now();
+
             let key = state.topology_key();
 
             let pci_dev = pci_devices
@@ -315,10 +318,13 @@ impl PciDevices {
                     topology: format!("pci_bdf={}", key),
                 })?;
 
-            let virtio_dev = {
+            let (virtio_dev, transport_latency) = {
                 let mut pci_dev = pci_dev.lock().expect("Poisoned lock");
+
+                let start_time = Instant::now();
                 pci_dev.reset(&state.transport_state)?;
-                pci_dev.virtio_device()
+
+                (pci_dev.virtio_device(), start_time.elapsed())
             };
 
             let mut dev = virtio_dev.lock().expect("Poisoned lock");
@@ -335,7 +341,17 @@ impl PciDevices {
                 mmds: mmds.clone(),
             };
 
+            let start_time = Instant::now();
+
             net.reset(ctor_args, &state.device_state)?;
+
+            info!(
+                "Reset PCI net device latency breakdown: BDF={}; total={:?}; transport={:?}; net state={:?}",
+                key,
+                device_start.elapsed(),
+                transport_latency,
+                start_time.elapsed(),
+            );
         }
 
         Ok(())
@@ -613,6 +629,8 @@ impl<'a> Persist<'a> for PciDevices {
             )?
         }
 
+        let device_start = Instant::now();
+
         // Initialize MMDS if MMDS state is included.
         if let Some(mmds) = &state.mmds {
             constructor_args.vm_resources.set_mmds_basic_config(
@@ -631,7 +649,11 @@ impl<'a> Persist<'a> for PciDevices {
             constructor_args.vm_resources.mmds_or_default()?;
         }
 
+        let init_mmds = device_start.elapsed();
+
         for net_state in &state.net_devices {
+            let start_time = Instant::now();
+
             let device = Arc::new(Mutex::new(Net::restore(
                 NetConstructorArgs {
                     mem: mem.clone(),
@@ -645,19 +667,33 @@ impl<'a> Persist<'a> for PciDevices {
                 &net_state.device_state,
             )?));
 
+            let init_net = start_time.elapsed();
+
             constructor_args
                 .vm_resources
                 .net_builder
                 .add_device(device.clone());
 
+            let start_time = Instant::now();
             pci_devices.restore_pci_device(
                 constructor_args.vm,
                 device,
                 &net_state.device_id,
                 &net_state.transport_state,
                 constructor_args.event_manager,
-            )?
+            )?;
+            info!(
+                "Per PCI net device restore breakdown: init net device={:?}; restore PCI state={:?}", 
+                init_net, 
+                start_time.elapsed(),
+            );
         }
+
+        info!(
+            "Complete PCI net restore breakdown: total={:?}; init MMDS={:?}", 
+            device_start.elapsed(),
+            init_mmds, 
+        );
 
         if let Some(vsock_state) = &state.vsock_device {
             let ctor_args = VsockUdsConstructorArgs {

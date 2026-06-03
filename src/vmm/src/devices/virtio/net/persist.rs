@@ -5,6 +5,7 @@
 
 use std::io;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use crate::logger::{info, warn};
 
 use serde::{Deserialize, Serialize};
@@ -167,17 +168,22 @@ impl Net {
             .active_state()
             .map(|active| active.interrupt.clone());
 
+        let start_time = Instant::now();
         self.rx_rate_limiter
             .reset(&state.rx_rate_limiter_state)
             .map_err(NetPersistError::ResetRateLimiter)?;
+        let rx_reset_latency = start_time.elapsed();
 
+        let start_time = Instant::now();
         self.tx_rate_limiter
             .reset(&state.tx_rate_limiter_state)
             .map_err(NetPersistError::ResetRateLimiter)?;
+        let tx_reset_latency = start_time.elapsed();
 
         // We trust the MMIODeviceManager::reset to pass us an MMDS data store reference if
         // there is at least one net device having the MMDS NS present and/or the mmds version was
         // persisted in the snapshot.
+        let start_time = Instant::now();
         if let Some(mmds_ns) = &state.mmds_ns {
             // We're safe calling unwrap() to discard the error, as MmdsNetworkStack::reset()
             // always returns Ok.
@@ -193,13 +199,16 @@ impl Net {
         } else {
             self.mmds_ns = None;
         }
+        let mmds_reset_latency = start_time.elapsed();
 
+        let start_time = Instant::now();
         self.queues = state.virtio_state.build_queues_checked(
             &constructor_args.mem,
             VirtioDeviceType::Net,
             NET_NUM_QUEUES,
             NET_QUEUE_MAX_SIZE,
         )?;
+        let queue_reset_latency = start_time.elapsed();
 
         self.avail_features = state.virtio_state.avail_features;
         self.acked_features = state.virtio_state.acked_features;
@@ -211,7 +220,9 @@ impl Net {
 
         self.reset_buffers()?;
 
+        let start_time = Instant::now();
         self.apply_activation_state(constructor_args.mem.clone())?;
+        let reapply_activation_latency = start_time.elapsed();
 
         if let Some(interrupt) = interrupt {
             self.device_state = DeviceState::Activated(ActiveState {
@@ -224,6 +235,15 @@ impl Net {
                 self.id
             );
         }
+
+        info!(
+            "Reset Net state latency breakdown: rx_rate_limiter={:?}; tx_rate_limiter={:?}; MMDS={:?}; build_queues={:?}; reapply activation state={:?}",
+            rx_reset_latency,
+            tx_reset_latency,
+            mmds_reset_latency,
+            queue_reset_latency,
+            reapply_activation_latency,
+        );
 
         Ok(())
     }

@@ -13,9 +13,10 @@ use std::fmt::{Debug, Formatter};
 use std::io::{ErrorKind, Write};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
+use std::time::Instant;
 
 use kvm_ioctls::{IoEventAddress, NoDatamatch};
-use log::warn;
+use log::{warn, info};
 use pci::{
     PciBdf, PciCapabilityId, PciClassCode, PciMassStorageSubclass, PciNetworkControllerSubclass,
     PciSubclass,
@@ -523,11 +524,13 @@ impl VirtioPciDevice {
             .as_ref()
             .ok_or(VirtioPciResetError::MissingInterrupt)?;
 
+        let start_time = Instant::now();
         interrupt
             .msix_config
             .lock()
             .expect("Poisoned lock")
             .reset(&state.msix_state, state.pci_device_bdf.into())?;
+        info!("Reset PCI MSI-X state latency: {:?}", start_time.elapsed());
 
         self.configuration = PciConfiguration::type0_from_state(
             state.pci_configuration_state.clone(),

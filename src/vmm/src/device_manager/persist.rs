@@ -6,8 +6,9 @@
 use std::fmt::{self, Debug};
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
+use std::time::Instant;
 
-use log::warn;
+use log::{warn, info};
 use serde::{Deserialize, Serialize};
 
 use super::acpi::ACPIDeviceManager;
@@ -460,6 +461,8 @@ impl<'a> Persist<'a> for MMIODeviceManager {
             )?;
         }
 
+        let device_start = Instant::now();
+
         // Initialize MMDS if MMDS state is included.
         if let Some(mmds) = &state.mmds {
             constructor_args.vm_resources.set_mmds_basic_config(
@@ -469,7 +472,11 @@ impl<'a> Persist<'a> for MMIODeviceManager {
             )?;
         }
 
+        let init_mmds = device_start.elapsed();
+
         for net_state in &state.net_devices {
+            let start_time = Instant::now();
+
             let device = Arc::new(Mutex::new(Net::restore(
                 NetConstructorArgs {
                     mem: mem.clone(),
@@ -483,11 +490,14 @@ impl<'a> Persist<'a> for MMIODeviceManager {
                 &net_state.device_state,
             )?));
 
+            let init_net = start_time.elapsed();
+
             constructor_args
                 .vm_resources
                 .net_builder
                 .add_device(device.clone());
 
+            let start_time = Instant::now();
             restore_helper(
                 device,
                 net_state.device_state.virtio_state.activated,
@@ -497,7 +507,18 @@ impl<'a> Persist<'a> for MMIODeviceManager {
                 &net_state.device_info,
                 constructor_args.event_manager,
             )?;
+            info!(
+                "Per MMIO net device restore breakdown: init net device={:?}; restore MMIO state={:?}", 
+                init_net, 
+                start_time.elapsed(),
+            );
         }
+
+        info!(
+            "Complete PCI net restore breakdown: total={:?}; init MMDS={:?}", 
+            device_start.elapsed(),
+            init_mmds, 
+        );
 
         if let Some(vsock_state) = &state.vsock_device {
             let ctor_args = VsockUdsConstructorArgs {
