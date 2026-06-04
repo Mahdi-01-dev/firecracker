@@ -819,21 +819,6 @@ pub fn reset_to_snapshot(
         .restore_state(&microvm_state.vm_state)
         .map_err(ResetSnapshotError::RestoreVmState)?;
 
-    let net_reset_start_time = Instant::now();
-    let net_reset_start_us = get_time_us(ClockType::Monotonic);
-
-    vmm.reset_net_devices(&microvm_state.device_states)
-        .map_err(ResetSnapshotError::ResetNetStates)?;
-
-    info!("Reset net devices latency: {:?}", net_reset_start_time.elapsed());
-    debug!(
-        "'reset net' VMM action took {} us.",
-        update_metric_with_elapsed_time(
-            &METRICS.latencies_us.vmm_net_reset,
-            net_reset_start_us
-        )
-    );
-
     let page_ranges: Vec<VirtualAddressRange> = {
         let reader = BufReader::new(&stream);
         serde_json::from_reader(reader).map_err(ResetSnapshotError::SerdeJson)?
@@ -892,7 +877,20 @@ pub fn reset_to_snapshot(
         }
     }
 
+    let net_reset_start_time = Instant::now();
+    let net_reset_start_us = get_time_us(ClockType::Monotonic);
 
+    vmm.reset_net_devices(&microvm_state.device_states)
+        .map_err(ResetSnapshotError::ResetNetStates)?;
+
+    info!("Reset net devices latency: {:?}", net_reset_start_time.elapsed());
+    debug!(
+        "'reset net' VMM action took {} us.",
+        update_metric_with_elapsed_time(
+            &METRICS.latencies_us.vmm_net_reset,
+            net_reset_start_us
+        )
+    );
 
     Ok(())
 }
